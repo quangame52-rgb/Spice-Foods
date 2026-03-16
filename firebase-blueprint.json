@@ -8,6 +8,10 @@
         "name": { "type": "string", "description": "Product name" },
         "description": { "type": "string", "description": "Product description" },
         "price": { "type": "number", "description": "Product price" },
+        "originalPrice": { "type": "number", "description": "Original price before discount" },
+        "discountPercent": { "type": "number", "description": "Discount percentage" },
+        "discountBadge": { "type": "string", "description": "Discount badge text (e.g., -20%)" },
+        "promoText": { "type": "string", "description": "Promotional text (e.g., Buy 2 get 1 free)" },
         "image": { "type": "string", "description": "Product image URL" },
         "category": { "type": "string", "enum": ["seasoning", "dipping", "powder", "hotpot"], "description": "Product category" },
         "weight": { "type": "string", "description": "Product weight (optional)" },
@@ -23,6 +27,26 @@
         "email": { "type": "string" },
         "role": { "type": "string", "enum": ["admin", "customer"] }
       }
+    },
+    "Order": {
+      "title": "Order",
+      "description": "Customer order",
+      "type": "object",
+      "properties": {
+        "orderCode": { "type": "string", "description": "Unique order code" },
+        "customerName": { "type": "string", "description": "Customer name" },
+        "customerPhone": { "type": "string", "description": "Customer phone" },
+        "customerEmail": { "type": "string", "description": "Customer email" },
+        "customerAddress": { "type": "string", "description": "Customer address" },
+        "note": { "type": "string", "description": "Order note" },
+        "productId": { "type": "string", "description": "ID of the ordered product" },
+        "productName": { "type": "string", "description": "Name of the ordered product" },
+        "productPrice": { "type": "number", "description": "Price of the ordered product" },
+        "paymentMethod": { "type": "string", "enum": ["cod", "qr"], "description": "Payment method" },
+        "status": { "type": "string", "enum": ["pending", "processing", "shipped", "delivered", "cancelled"], "description": "Order status" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Order creation timestamp" }
+      },
+      "required": ["orderCode", "customerName", "customerPhone", "customerAddress", "productId", "productName", "productPrice", "paymentMethod", "status"]
     },
     "SiteSettings": {
       "title": "Site Settings",
@@ -54,6 +78,10 @@
     "/users": {
       "schema": "User",
       "description": "Collection of user profiles"
+    },
+    "/orders": {
+      "schema": "Order",
+      "description": "Collection of customer orders"
     },
     "/site_settings": {
       "schema": "SiteSettings",

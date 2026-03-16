@@ -13,7 +13,7 @@ import {
 } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { db, storage, auth } from '../firebase';
-import { Product, SiteSettings } from '../types';
+import { Product, SiteSettings, Order } from '../types';
 import { 
   LogOut, 
   Plus, 
@@ -30,15 +30,17 @@ import {
   Play,
   Image as ImageIcon,
   Images as ImagesIcon,
-  Video as VideoIcon
+  Video as VideoIcon,
+  ShoppingCart
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { signOut } from 'firebase/auth';
 import { getDirectImageUrl } from '../utils';
 
 export default function Admin() {
-  const [activeTab, setActiveTab] = useState<'products' | 'settings'>('products');
+  const [activeTab, setActiveTab] = useState<'products' | 'settings' | 'orders'>('products');
   const [products, setProducts] = useState<Product[]>([]);
+  const [orders, setOrders] = useState<Order[]>([]);
   const [isEditing, setIsEditing] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
@@ -60,6 +62,7 @@ export default function Admin() {
     storyImages: [],
     storyVideoUrl: '',
     storyMediaType: 'image',
+    googleSheetUrl: 'https://script.google.com/macros/s/AKfycbyIHB2CDIFpShI7COLCV50ENHFS898NOuF3tjFYEWc7RjSMrmISLBNnPlOttRBk/exec',
     updatedAt: new Date().toISOString()
   });
 
@@ -67,6 +70,10 @@ export default function Admin() {
     name: '',
     description: '',
     price: 0,
+    originalPrice: 0,
+    discountPercent: 0,
+    discountBadge: '',
+    promoText: '',
     category: 'seasoning',
     weight: '',
     image: ''
@@ -96,9 +103,22 @@ export default function Admin() {
       console.error("Admin: Error listening to settings:", error);
     });
 
+    // Fetch Orders
+    const qOrders = query(collection(db, 'orders'), orderBy('createdAt', 'desc'));
+    const unsubOrders = onSnapshot(qOrders, (snapshot) => {
+      const ords = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      setOrders(ords);
+    }, (error) => {
+      console.error("Admin: Error listening to orders:", error);
+    });
+
     return () => {
       unsubProds();
       unsubSettings();
+      unsubOrders();
     };
   }, []);
 
@@ -219,19 +239,25 @@ export default function Admin() {
     }
 
     try {
+      const cleanData = Object.fromEntries(
+        Object.entries(formData).filter(([_, v]) => v !== undefined)
+      );
+
       if (isEditing) {
+        const { id, ...updateData } = cleanData as any;
         await updateDoc(doc(db, 'products', isEditing), {
-          ...formData,
+          ...updateData,
           updatedAt: new Date().toISOString()
         });
         setIsEditing(null);
       } else {
+        const { id, ...addData } = cleanData as any;
         await addDoc(collection(db, 'products'), {
-          ...formData,
+          ...addData,
           updatedAt: new Date().toISOString()
         });
       }
-      setFormData({ name: '', description: '', price: 0, category: 'seasoning', weight: '', image: '' });
+      setFormData({ name: '', description: '', price: 0, originalPrice: 0, discountPercent: 0, discountBadge: '', promoText: '', category: 'seasoning', weight: '', image: '' });
     } catch (error) {
       console.error("Error saving product:", error);
       alert("Lỗi lưu sản phẩm!");
@@ -302,6 +328,12 @@ export default function Admin() {
               Sản phẩm
             </button>
             <button 
+              onClick={() => setActiveTab('orders')}
+              className={`px-6 py-2 rounded-xl text-sm font-bold transition-all ${activeTab === 'orders' ? 'bg-red-600 text-white shadow-md' : 'text-gray-500 hover:text-gray-900'}`}
+            >
+              Đơn hàng
+            </button>
+            <button 
               onClick={() => setActiveTab('settings')}
               className={`px-6 py-2 rounded-xl text-sm font-bold transition-all ${activeTab === 'settings' ? 'bg-red-600 text-white shadow-md' : 'text-gray-500 hover:text-gray-900'}`}
             >
@@ -318,7 +350,7 @@ export default function Admin() {
           </button>
         </div>
 
-        {activeTab === 'products' ? (
+        {activeTab === 'products' && (
           <>
             {/* Form Section */}
             <div className="bg-white rounded-3xl shadow-sm border border-gray-100 p-6 mb-8">
@@ -346,15 +378,62 @@ export default function Admin() {
                       className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-red-600/20 outline-none h-24"
                     />
                   </div>
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-3 gap-4">
                     <div>
-                      <label className="block text-sm font-bold text-gray-700 mb-1">Giá (VNĐ) *</label>
+                      <label className="block text-sm font-bold text-gray-700 mb-1">Giá gốc (VNĐ)</label>
+                      <input 
+                        type="number" 
+                        value={formData.originalPrice || ''}
+                        onChange={e => {
+                          const originalPrice = Number(e.target.value);
+                          const discountPercent = formData.discountPercent || 0;
+                          const price = originalPrice > 0 ? originalPrice - (originalPrice * discountPercent / 100) : formData.price;
+                          setFormData({...formData, originalPrice, price});
+                        }}
+                        className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-red-600/20 outline-none"
+                        placeholder="VD: 100000"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-bold text-gray-700 mb-1">Khuyến mãi (%)</label>
+                      <input 
+                        type="number" 
+                        value={formData.discountPercent || ''}
+                        onChange={e => {
+                          const discountPercent = Number(e.target.value);
+                          const originalPrice = formData.originalPrice || 0;
+                          const price = originalPrice > 0 ? originalPrice - (originalPrice * discountPercent / 100) : formData.price;
+                          setFormData({
+                            ...formData, 
+                            discountPercent, 
+                            price, 
+                            discountBadge: discountPercent > 0 ? `-${discountPercent}%` : formData.discountBadge
+                          });
+                        }}
+                        className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-red-600/20 outline-none"
+                        placeholder="VD: 20"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-bold text-gray-700 mb-1">Giá bán (VNĐ) *</label>
                       <input 
                         type="number" 
                         value={formData.price}
                         onChange={e => setFormData({...formData, price: Number(e.target.value)})}
                         className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-red-600/20 outline-none"
                         required
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-bold text-gray-700 mb-1">Nhãn khuyến mãi</label>
+                      <input 
+                        type="text" 
+                        value={formData.discountBadge || ''}
+                        onChange={e => setFormData({...formData, discountBadge: e.target.value})}
+                        className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-red-600/20 outline-none"
+                        placeholder="VD: -20%, Hot"
                       />
                     </div>
                     <div>
@@ -367,6 +446,16 @@ export default function Admin() {
                         className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-red-600/20 outline-none"
                       />
                     </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-bold text-gray-700 mb-1">Chương trình tặng kèm</label>
+                    <input 
+                      type="text" 
+                      value={formData.promoText || ''}
+                      onChange={e => setFormData({...formData, promoText: e.target.value})}
+                      className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-red-600/20 outline-none"
+                      placeholder="VD: Mua 2 tặng 1 xốt chấm"
+                    />
                   </div>
                 </div>
 
@@ -444,7 +533,7 @@ export default function Admin() {
                         type="button"
                         onClick={() => {
                           setIsEditing(null);
-                          setFormData({ name: '', description: '', price: 0, category: 'seasoning', weight: '', image: '' });
+                          setFormData({ name: '', description: '', price: 0, originalPrice: 0, discountPercent: 0, discountBadge: '', promoText: '', category: 'seasoning', weight: '', image: '' });
                         }}
                         className="px-6 py-3 bg-gray-100 text-gray-700 rounded-xl font-bold hover:bg-gray-200 transition-all"
                       >
@@ -493,7 +582,7 @@ export default function Admin() {
                           </span>
                         </td>
                         <td className="px-6 py-4 font-bold text-gray-900">
-                          {product.price.toLocaleString('vi-VN')}đ
+                          {Number(product.price || 0).toLocaleString('vi-VN')}đ
                         </td>
                         <td className="px-6 py-4 text-right">
                           <div className="flex justify-end space-x-2">
@@ -518,7 +607,119 @@ export default function Admin() {
               </div>
             </div>
           </>
-        ) : (
+        )}
+
+        {activeTab === 'orders' && (
+          <div className="bg-white rounded-3xl shadow-sm border border-gray-100 p-6">
+            <h2 className="text-xl font-bold mb-6 flex items-center">
+              <ShoppingCart className="w-6 h-6 mr-2 text-red-600" />
+              Quản lý đơn hàng
+            </h2>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-gray-50 border-b border-gray-100">
+                    <th className="p-4 font-bold text-gray-600 text-sm">Mã ĐH</th>
+                    <th className="p-4 font-bold text-gray-600 text-sm">Khách hàng</th>
+                    <th className="p-4 font-bold text-gray-600 text-sm">Sản phẩm</th>
+                    <th className="p-4 font-bold text-gray-600 text-sm">Tổng tiền</th>
+                    <th className="p-4 font-bold text-gray-600 text-sm">Thanh toán</th>
+                    <th className="p-4 font-bold text-gray-600 text-sm">Trạng thái</th>
+                    <th className="p-4 font-bold text-gray-600 text-sm">Ngày đặt</th>
+                    <th className="p-4 font-bold text-gray-600 text-sm">Hành động</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {orders.map((order) => (
+                    <tr key={order.id} className="border-b border-gray-50 hover:bg-gray-50/50 transition-colors">
+                      <td className="p-4 font-mono text-sm font-bold text-gray-900">{order.orderCode}</td>
+                      <td className="p-4">
+                        <div className="font-bold text-gray-900">{order.customerName}</div>
+                        <div className="text-sm text-gray-500">{order.customerPhone}</div>
+                        {order.customerEmail && <div className="text-sm text-gray-500">{order.customerEmail}</div>}
+                        <div className="text-xs text-gray-400 truncate max-w-[150px]" title={order.customerAddress}>{order.customerAddress}</div>
+                      </td>
+                      <td className="p-4">
+                        {order.items ? (
+                          <div className="space-y-1">
+                            {order.items.map((item: any, idx: number) => (
+                              <div key={idx} className="text-sm">
+                                <span className="font-bold text-gray-900">{item.quantity}x</span> {item.name}
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="font-medium text-gray-900">{order.productName}</div>
+                        )}
+                      </td>
+                      <td className="p-4 font-bold text-red-600">
+                        {(order.totalAmount || order.productPrice || 0).toLocaleString('vi-VN')}đ
+                      </td>
+                      <td className="p-4">
+                        <span className={`px-3 py-1 rounded-full text-xs font-bold ${
+                          order.paymentMethod === 'qr' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-700'
+                        }`}>
+                          {order.paymentMethod === 'qr' ? 'Chuyển khoản QR' : 'COD'}
+                        </span>
+                      </td>
+                      <td className="p-4">
+                        <select
+                          value={order.status}
+                          onChange={async (e) => {
+                            try {
+                              await updateDoc(doc(db, 'orders', order.id), { status: e.target.value });
+                            } catch (error) {
+                              console.error("Error updating order status:", error);
+                              alert("Lỗi cập nhật trạng thái!");
+                            }
+                          }}
+                          className={`px-3 py-1.5 rounded-lg text-sm font-bold outline-none border ${
+                            order.status === 'pending' ? 'bg-yellow-50 text-yellow-700 border-yellow-200' :
+                            order.status === 'processing' ? 'bg-blue-50 text-blue-700 border-blue-200' :
+                            order.status === 'shipped' ? 'bg-purple-50 text-purple-700 border-purple-200' :
+                            order.status === 'delivered' ? 'bg-green-50 text-green-700 border-green-200' :
+                            'bg-red-50 text-red-700 border-red-200'
+                          }`}
+                        >
+                          <option value="pending">Chờ xử lý</option>
+                          <option value="processing">Đang chuẩn bị</option>
+                          <option value="shipped">Đang giao</option>
+                          <option value="delivered">Đã giao</option>
+                          <option value="cancelled">Đã hủy</option>
+                        </select>
+                      </td>
+                      <td className="p-4 text-sm text-gray-500">
+                        {new Date(order.createdAt).toLocaleDateString('vi-VN')}
+                      </td>
+                      <td className="p-4">
+                        <button 
+                          onClick={async () => {
+                            if (window.confirm("Bạn có chắc chắn muốn xóa đơn hàng này?")) {
+                              await deleteDoc(doc(db, 'orders', order.id));
+                            }
+                          }}
+                          className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-colors"
+                          title="Xóa đơn hàng"
+                        >
+                          <Trash2 className="w-5 h-5" />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                  {orders.length === 0 && (
+                    <tr>
+                      <td colSpan={8} className="p-8 text-center text-gray-500">
+                        Chưa có đơn hàng nào
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'settings' && (
           <div className="bg-white rounded-3xl shadow-sm border border-gray-100 p-8">
             <h2 className="text-xl font-bold mb-8 flex items-center">
               <SettingsIcon className="w-6 h-6 mr-2 text-red-600" />
@@ -649,6 +850,33 @@ export default function Admin() {
                       onChange={e => setSiteSettings({...siteSettings, contactAddress: e.target.value})}
                       className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-red-600/20 outline-none"
                     />
+                  </div>
+                </div>
+              </div>
+
+              {/* Tích hợp Google Sheets */}
+              <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+                <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center">
+                  <span className="w-8 h-8 rounded-lg bg-green-100 text-green-600 flex items-center justify-center mr-3">
+                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                  </span>
+                  Tích hợp Google Sheets
+                </h3>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-bold text-gray-700 mb-1">Google Apps Script Web App URL</label>
+                    <input 
+                      type="text" 
+                      value={siteSettings.googleSheetUrl || ''}
+                      onChange={e => setSiteSettings({...siteSettings, googleSheetUrl: e.target.value})}
+                      placeholder="https://script.google.com/macros/s/.../exec"
+                      className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-green-600/20 outline-none"
+                    />
+                    <p className="text-xs text-gray-500 mt-2">
+                      Nhập URL Web App của Google Apps Script để tự động đồng bộ đơn hàng mới về Google Sheets.
+                    </p>
                   </div>
                 </div>
               </div>

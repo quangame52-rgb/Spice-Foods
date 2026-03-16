@@ -3,9 +3,34 @@ export interface Product {
   name: string;
   description: string;
   price: number;
+  originalPrice?: number;
+  discountPercent?: number;
+  discountBadge?: string;
+  promoText?: string;
   image: string;
   category: 'seasoning' | 'dipping' | 'powder' | 'hotpot';
   weight?: string;
+}
+
+export interface CartItem extends Product {
+  quantity: number;
+}
+
+export interface Order {
+  id: string;
+  orderCode: string;
+  customerName: string;
+  customerPhone: string;
+  customerEmail?: string;
+  customerAddress: string;
+  note?: string;
+  items?: CartItem[];
+  productName?: string; // For backward compatibility
+  productPrice?: number; // For backward compatibility
+  totalAmount: number;
+  paymentMethod: 'cod' | 'qr';
+  status: 'pending' | 'processing' | 'shipped' | 'delivered' | 'cancelled';
+  createdAt: string;
 }
 
 export interface Feature {
@@ -28,5 +53,6 @@ export interface SiteSettings {
   storyImages?: string[];
   storyVideoUrl?: string;
   storyMediaType?: 'image' | 'video' | 'gallery';
+  googleSheetUrl?: string;
   updatedAt: string;
 }

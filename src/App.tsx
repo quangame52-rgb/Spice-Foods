@@ -3,7 +3,7 @@ import { Routes, Route, Navigate, Link } from 'react-router-dom';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { collection, query, orderBy, onSnapshot, getDocs, addDoc, doc, getDoc } from 'firebase/firestore';
 import { auth, db } from './firebase';
-import { Product, SiteSettings } from './types';
+import { Product, SiteSettings, CartItem } from './types';
 import { PRODUCTS as INITIAL_PRODUCTS } from './constants';
 
 // Pages
@@ -27,7 +27,12 @@ import {
   Leaf,
   Clock,
   ShieldCheck,
-  Settings
+  Settings,
+  QrCode,
+  Truck,
+  Minus,
+  Plus,
+  Trash2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { FEATURES } from './constants';
@@ -66,6 +71,19 @@ const Landing = () => {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [loading, setLoading] = useState(true);
 
+  // Order State
+  const [cart, setCart] = useState<CartItem[]>([]);
+  const [isCartOpen, setIsCartOpen] = useState(false);
+  const [orderForm, setOrderForm] = useState({
+    name: '',
+    phone: '',
+    email: '',
+    address: '',
+    note: ''
+  });
+  const [showPaymentOptions, setShowPaymentOptions] = useState(false);
+  const [orderCode, setOrderCode] = useState('');
+
   useEffect(() => {
     const handleScroll = () => setIsScrolled(window.scrollY > 20);
     window.addEventListener('scroll', handleScroll);
@@ -99,7 +117,7 @@ const Landing = () => {
     });
 
     // Fetch products from Firestore
-    const q = query(collection(db, 'products'), orderBy('updatedAt', 'desc'));
+    const q = query(collection(db, 'products'));
     const unsubscribeProducts = onSnapshot(q, (snapshot) => {
       if (snapshot.empty) {
         setProducts([]);
@@ -108,6 +126,10 @@ const Landing = () => {
           id: doc.id,
           ...doc.data()
         })) as Product[];
+        
+        // Sort by name in memory to avoid missing products without name field
+        prods.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+        
         setProducts(prods);
       }
       setLoading(false);
@@ -182,6 +204,124 @@ const Landing = () => {
     return url.match(/\.(mp4|webm|ogg|mov)(\?.*)?$/i) !== null;
   };
 
+  const handleAddToCart = (product: Product) => {
+    setCart(prev => {
+      const existing = prev.find(item => item.id === product.id);
+      if (existing) {
+        return prev.map(item => item.id === product.id ? { ...item, quantity: item.quantity + 1 } : item);
+      }
+      return [...prev, { ...product, quantity: 1 }];
+    });
+    setIsCartOpen(true);
+  };
+
+  const updateQuantity = (id: string, delta: number) => {
+    setCart(prev => prev.map(item => {
+      if (item.id === id) {
+        const newQuantity = Math.max(1, item.quantity + delta);
+        return { ...item, quantity: newQuantity };
+      }
+      return item;
+    }));
+  };
+
+  const removeFromCart = (id: string) => {
+    setCart(prev => prev.filter(item => item.id !== id));
+  };
+
+  const cartTotal = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+
+  const handleOrderSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (cart.length === 0) {
+      alert('Giỏ hàng của bạn đang trống!');
+      return;
+    }
+    if (!orderForm.name || !orderForm.phone || !orderForm.address) {
+      alert('Vui lòng điền đầy đủ thông tin bắt buộc!');
+      return;
+    }
+    
+    // Generate random order code: SPICEFOODS + 6 random chars
+    const randomStr = Math.random().toString(36).substring(2, 8).toUpperCase();
+    setOrderCode(`SPICEFOODS${randomStr}`);
+    setShowPaymentOptions(true);
+  };
+
+  const saveOrder = async (paymentMethod: 'cod' | 'qr') => {
+    if (cart.length === 0) return;
+    
+    try {
+      const orderData = {
+        orderCode,
+        customerName: orderForm.name,
+        customerPhone: orderForm.phone,
+        customerEmail: orderForm.email,
+        customerAddress: orderForm.address,
+        note: orderForm.note,
+        items: cart.map(item => ({
+          id: item.id,
+          name: item.name,
+          price: item.price,
+          quantity: item.quantity
+        })),
+        totalAmount: cartTotal,
+        paymentMethod,
+        status: 'pending',
+        createdAt: new Date().toISOString()
+      };
+
+      await addDoc(collection(db, 'orders'), orderData);
+      
+      // Send to Google Sheets if configured
+      const sheetUrl = siteSettings?.googleSheetUrl || 'https://script.google.com/macros/s/AKfycbyIHB2CDIFpShI7COLCV50ENHFS898NOuF3tjFYEWc7RjSMrmISLBNnPlOttRBk/exec';
+      if (sheetUrl) {
+        try {
+          const orderInfo = `Khách hàng: ${orderForm.name}\nSản phẩm:\n${cart.map(item => `- ${item.quantity}x ${item.name} (${(item.price * item.quantity).toLocaleString('vi-VN')}đ)`).join('\n')}\nTổng tiền: ${cartTotal.toLocaleString('vi-VN')}đ`;
+          
+          const sheetPayload = {
+            orderDate: new Date().toLocaleString('vi-VN'),
+            orderCode: orderCode,
+            orderInfo: orderInfo,
+            phone: orderForm.phone,
+            email: orderForm.email,
+            address: orderForm.address,
+            note: orderForm.note,
+            paymentMethod: paymentMethod
+          };
+
+          fetch(sheetUrl, {
+            method: 'POST',
+            mode: 'no-cors',
+            headers: {
+              'Content-Type': 'text/plain;charset=utf-8',
+            },
+            body: JSON.stringify(sheetPayload)
+          }).catch(err => console.error("Error sending to Google Sheets:", err));
+        } catch (sheetError) {
+          console.error("Error preparing Google Sheets payload:", sheetError);
+        }
+      }
+      
+      alert(`Đặt hàng thành công! Mã đơn hàng của bạn là ${orderCode}. Chúng tôi sẽ liên hệ với bạn sớm nhất.`);
+      setShowPaymentOptions(false);
+      setOrderForm({ name: '', phone: '', email: '', address: '', note: '' });
+      setCart([]);
+      setIsCartOpen(false);
+    } catch (error) {
+      console.error("Error saving order:", error);
+      alert('Có lỗi xảy ra khi đặt hàng. Vui lòng thử lại sau.');
+    }
+  };
+
+  const handleConfirmCOD = () => {
+    saveOrder('cod');
+  };
+
+  const handleConfirmQR = () => {
+    saveOrder('qr');
+  };
+
   return (
     <div className="min-h-screen bg-white font-sans text-gray-900 selection:bg-red-100 selection:text-red-600">
       {/* Navbar */}
@@ -228,7 +368,10 @@ const Landing = () => {
               <Link to="/login" className={`p-2 rounded-full transition-colors ${isScrolled ? 'text-gray-400 hover:text-red-600' : 'text-white/50 hover:text-white'}`}>
                 <Settings className="w-5 h-5" />
               </Link>
-              <button className="bg-red-600 text-white px-6 py-2 rounded-full text-sm font-semibold hover:bg-red-700 transition-all shadow-lg shadow-red-600/20">
+              <button 
+                onClick={() => document.getElementById('sản-phẩm')?.scrollIntoView({ behavior: 'smooth' })}
+                className="bg-red-600 text-white px-6 py-2 rounded-full text-sm font-semibold hover:bg-red-700 transition-all shadow-lg shadow-red-600/20"
+              >
                 Đặt hàng ngay
               </button>
             </div>
@@ -266,7 +409,13 @@ const Landing = () => {
                   </a>
                 ))}
                 <div className="pt-4">
-                  <button className="w-full bg-red-600 text-white px-6 py-3 rounded-xl font-semibold">
+                  <button 
+                    onClick={() => {
+                      setIsMobileMenuOpen(false);
+                      document.getElementById('sản-phẩm')?.scrollIntoView({ behavior: 'smooth' });
+                    }}
+                    className="w-full bg-red-600 text-white px-6 py-3 rounded-xl font-semibold"
+                  >
                     Đặt hàng ngay
                   </button>
                 </div>
@@ -362,27 +511,49 @@ const Landing = () => {
                   <motion.div
                     key={product.id}
                     whileHover={{ y: -10 }}
-                    className="bg-white rounded-3xl overflow-hidden shadow-sm hover:shadow-xl transition-all border border-gray-100 group"
+                    className="bg-white rounded-3xl overflow-hidden shadow-sm hover:shadow-xl transition-all border border-gray-100 group flex flex-col"
                   >
-                    <div className="relative aspect-square overflow-hidden">
+                    <div className="relative aspect-square overflow-hidden shrink-0">
                       <img 
                         src={getDirectImageUrl(product.image)} 
                         alt={product.name} 
                         className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" 
                         referrerPolicy="no-referrer" 
                       />
-                      {product.weight && <div className="absolute top-4 right-4 bg-white/90 backdrop-blur-sm px-3 py-1 rounded-full text-xs font-bold text-red-600 shadow-sm">{product.weight}</div>}
+                      {product.weight && <div className="absolute top-4 right-4 bg-white/90 backdrop-blur-sm px-3 py-1 rounded-full text-xs font-bold text-gray-600 shadow-sm">{product.weight}</div>}
+                      {product.discountBadge && <div className="absolute top-4 left-4 bg-red-600 text-white px-3 py-1 rounded-full text-xs font-bold shadow-md animate-pulse">{product.discountBadge}</div>}
                     </div>
-                    <div className="p-6">
+                    <div className="p-6 flex flex-col flex-grow">
                       <h3 className="text-lg font-bold text-gray-900 leading-tight mb-2 group-hover:text-red-600 transition-colors">{product.name}</h3>
-                      <p className="text-sm text-gray-500 mb-4 line-clamp-2">{product.description}</p>
-                      <div className="flex items-center justify-between">
-                        <span className="text-xl font-black text-red-600">{product.price.toLocaleString('vi-VN')}đ</span>
-                        <div className="flex items-center text-yellow-400">
+                      <p className="text-sm text-gray-500 mb-4 line-clamp-2 flex-grow">{product.description}</p>
+                      
+                      {product.promoText && product.promoText.trim() !== '' && (
+                        <div className="mb-4 bg-red-50 text-red-700 text-xs font-bold px-3 py-2 rounded-lg border border-red-100 flex items-start">
+                          <span className="mr-1.5 text-red-500">🎁</span>
+                          <span>Khuyến mãi: {product.promoText}</span>
+                        </div>
+                      )}
+
+                      <div className="flex items-end justify-between mb-4">
+                        <div>
+                          <div className="text-xs text-gray-500 mb-1">Giá bán:</div>
+                          <div className="text-xl font-black text-red-600">{Number(product.price).toLocaleString('vi-VN')}đ</div>
+                          {product.originalPrice && Number(product.originalPrice) > Number(product.price) && (
+                            <div className="text-sm text-gray-400 line-through mt-0.5">Giá gốc: {Number(product.originalPrice).toLocaleString('vi-VN')}đ</div>
+                          )}
+                        </div>
+                        <div className="flex items-center text-yellow-400 mb-1">
                           <Star className="w-4 h-4 fill-current" />
                           <span className="ml-1 text-xs font-bold text-gray-400">5.0</span>
                         </div>
                       </div>
+                      <button 
+                        onClick={() => handleAddToCart(product)}
+                        className="w-full bg-red-50 text-red-600 font-bold py-2.5 rounded-xl hover:bg-red-600 hover:text-white transition-colors mt-auto flex items-center justify-center"
+                      >
+                        <ShoppingCart className="w-5 h-5 mr-2" />
+                        Thêm vào giỏ
+                      </button>
                     </div>
                   </motion.div>
                 ))}
@@ -540,29 +711,297 @@ const Landing = () => {
                 </div>
               </div>
               <div className="bg-white rounded-[2rem] p-8 text-gray-900">
-                <h3 className="text-2xl font-bold mb-6">Gửi tin nhắn</h3>
-                <form className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-bold mb-2">Họ và tên</label>
-                    <input type="text" className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-red-500 outline-none transition-all" placeholder="Nhập tên của bạn" />
+                {showPaymentOptions ? (
+                  <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                    <div className="flex items-center justify-between mb-2">
+                      <h3 className="text-2xl font-bold">Thanh toán</h3>
+                      <button onClick={() => setShowPaymentOptions(false)} className="text-gray-400 hover:text-gray-600 bg-gray-100 p-2 rounded-full">
+                        <X className="w-5 h-5" />
+                      </button>
+                    </div>
+                    
+                    <div className="bg-blue-50 p-5 rounded-2xl border border-blue-100">
+                      <h4 className="font-bold text-blue-900 mb-3 flex items-center text-lg">
+                        <QrCode className="w-5 h-5 mr-2" />
+                        Cách 1: Quét mã QR (Khuyên dùng)
+                      </h4>
+                      <div className="flex flex-col items-center bg-white p-6 rounded-xl shadow-sm">
+                        <img 
+                          src={`https://qr.sepay.vn/img?acc=962476LINQ&bank=BIDV&amount=${cartTotal}&des=${orderCode}&template=compact`} 
+                          alt="QR Code" 
+                          className="w-48 h-48 object-contain mb-4 border border-gray-100 rounded-lg"
+                        />
+                        <div className="text-center text-sm space-y-2 w-full">
+                          <div className="flex justify-between border-b border-gray-50 pb-2">
+                            <span className="text-gray-500">Ngân hàng:</span>
+                            <strong>BIDV</strong>
+                          </div>
+                          <div className="flex justify-between border-b border-gray-50 pb-2">
+                            <span className="text-gray-500">Số tài khoản:</span>
+                            <strong>962476LINQ</strong>
+                          </div>
+                          <div className="flex justify-between border-b border-gray-50 pb-2">
+                            <span className="text-gray-500">Số tiền:</span>
+                            <strong className="text-red-600 text-base">{cartTotal.toLocaleString('vi-VN')}đ</strong>
+                          </div>
+                          <div className="flex justify-between pt-1">
+                            <span className="text-gray-500">Nội dung:</span>
+                            <strong className="text-blue-600">{orderCode}</strong>
+                          </div>
+                        </div>
+                        <button 
+                          onClick={handleConfirmQR}
+                          className="mt-6 w-full bg-blue-600 text-white py-3 rounded-xl font-bold hover:bg-blue-700 transition-all shadow-md"
+                        >
+                          Tôi đã thanh toán
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="bg-gray-50 p-5 rounded-2xl border border-gray-200">
+                      <h4 className="font-bold text-gray-900 mb-2 flex items-center text-lg">
+                        <Truck className="w-5 h-5 mr-2" />
+                        Cách 2: Thanh toán khi nhận hàng (COD)
+                      </h4>
+                      <p className="text-sm text-gray-600 mb-5">
+                        Bạn sẽ thanh toán bằng tiền mặt khi nhân viên giao hàng đến địa chỉ của bạn.
+                      </p>
+                      <button 
+                        onClick={handleConfirmCOD}
+                        className="w-full bg-gray-900 text-white py-4 rounded-xl font-bold hover:bg-black transition-all shadow-lg"
+                      >
+                        Xác nhận đặt hàng COD
+                      </button>
+                    </div>
                   </div>
-                  <div>
-                    <label className="block text-sm font-bold mb-2">Số điện thoại</label>
-                    <input type="tel" className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-red-500 outline-none transition-all" placeholder="Nhập số điện thoại" />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-bold mb-2">Nội dung</label>
-                    <textarea className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-red-500 outline-none transition-all h-32" placeholder="Bạn cần tư vấn gì?"></textarea>
-                  </div>
-                  <button className="w-full bg-red-600 text-white py-4 rounded-xl font-bold hover:bg-red-700 transition-all shadow-lg shadow-red-600/20">
-                    Gửi yêu cầu
-                  </button>
-                </form>
+                ) : (
+                  <>
+                    <h3 className="text-2xl font-bold mb-6">Thông tin đặt hàng</h3>
+                    <form className="space-y-4" onSubmit={handleOrderSubmit}>
+                      {/* Product Selection Display */}
+                      <div className="mb-4">
+                        <label className="block text-sm font-bold mb-2">Sản phẩm đã chọn</label>
+                        {cart.length > 0 ? (
+                          <div className="space-y-3">
+                            {cart.map(item => (
+                              <div key={item.id} className="flex items-center justify-between p-3 bg-red-50 rounded-xl border border-red-100">
+                                <div className="flex items-center space-x-3">
+                                  <img src={getDirectImageUrl(item.image)} alt={item.name} className="w-12 h-12 rounded-lg object-cover" />
+                                  <div>
+                                    <div className="font-bold text-sm text-gray-900">{item.name}</div>
+                                    <div className="flex items-center space-x-2">
+                                      <span className="text-xs text-gray-500">Đơn giá:</span>
+                                      <span className="text-red-600 text-sm font-bold">{Number(item.price).toLocaleString('vi-VN')}đ</span>
+                                      <span className="text-xs text-gray-500 ml-2">x {item.quantity}</span>
+                                    </div>
+                                  </div>
+                                </div>
+                                <div className="text-right">
+                                  <div className="font-bold text-red-600">{(item.price * item.quantity).toLocaleString('vi-VN')}đ</div>
+                                  <button type="button" onClick={() => removeFromCart(item.id!)} className="text-xs text-gray-400 hover:text-red-600 mt-1">
+                                    Xóa
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                            <div className="flex justify-between items-center p-3 bg-gray-50 rounded-xl border border-gray-200">
+                              <span className="font-bold text-gray-700">Tổng cộng:</span>
+                              <span className="font-black text-red-600 text-lg">{cartTotal.toLocaleString('vi-VN')}đ</span>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="p-4 bg-gray-50 rounded-xl border border-gray-200 text-sm text-gray-500 italic text-center">
+                            Giỏ hàng của bạn đang trống
+                          </div>
+                        )}
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-bold mb-2">Họ và tên <span className="text-red-500">*</span></label>
+                        <input 
+                          type="text" 
+                          required
+                          value={orderForm.name}
+                          onChange={e => setOrderForm({...orderForm, name: e.target.value})}
+                          className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-red-500 outline-none transition-all" 
+                          placeholder="Nhập tên của bạn" 
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-bold mb-2">Số điện thoại <span className="text-red-500">*</span></label>
+                        <input 
+                          type="tel" 
+                          required
+                          value={orderForm.phone}
+                          onChange={e => setOrderForm({...orderForm, phone: e.target.value})}
+                          className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-red-500 outline-none transition-all" 
+                          placeholder="Nhập số điện thoại" 
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-bold mb-2">Email</label>
+                        <input 
+                          type="email" 
+                          value={orderForm.email}
+                          onChange={e => setOrderForm({...orderForm, email: e.target.value})}
+                          className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-red-500 outline-none transition-all" 
+                          placeholder="Nhập địa chỉ email (không bắt buộc)" 
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-bold mb-2">Địa chỉ giao hàng <span className="text-red-500">*</span></label>
+                        <input 
+                          type="text" 
+                          required
+                          value={orderForm.address}
+                          onChange={e => setOrderForm({...orderForm, address: e.target.value})}
+                          className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-red-500 outline-none transition-all" 
+                          placeholder="Nhập địa chỉ chi tiết (Số nhà, đường, phường/xã...)" 
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-bold mb-2">Ghi chú (Tùy chọn)</label>
+                        <textarea 
+                          value={orderForm.note}
+                          onChange={e => setOrderForm({...orderForm, note: e.target.value})}
+                          className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-red-500 outline-none transition-all h-24" 
+                          placeholder="Ghi chú thêm cho đơn hàng..."
+                        ></textarea>
+                      </div>
+                      <button 
+                        type="submit"
+                        className="w-full bg-red-600 text-white py-4 rounded-xl font-bold hover:bg-red-700 transition-all shadow-lg shadow-red-600/20"
+                      >
+                        Gửi yêu cầu đặt hàng
+                      </button>
+                    </form>
+                  </>
+                )}
               </div>
             </div>
           </div>
         </div>
       </section>
+
+      {/* Floating Cart Button */}
+      {cart.length > 0 && (
+        <button
+          onClick={() => setIsCartOpen(true)}
+          className="fixed bottom-8 right-8 bg-red-600 text-white p-4 rounded-full shadow-2xl hover:bg-red-700 transition-all z-40 flex items-center justify-center group animate-in slide-in-from-bottom-10"
+        >
+          <div className="relative">
+            <ShoppingCart className="w-6 h-6" />
+            <span className="absolute -top-2 -right-2 bg-yellow-400 text-red-900 text-xs font-bold w-5 h-5 rounded-full flex items-center justify-center border-2 border-red-600">
+              {cart.reduce((sum, item) => sum + item.quantity, 0)}
+            </span>
+          </div>
+        </button>
+      )}
+
+      {/* Cart Modal */}
+      <AnimatePresence>
+        {isCartOpen && (
+          <>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsCartOpen(false)}
+              className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50"
+            />
+            <motion.div
+              initial={{ x: '100%' }}
+              animate={{ x: 0 }}
+              exit={{ x: '100%' }}
+              transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+              className="fixed top-0 right-0 h-full w-full md:w-[450px] bg-white shadow-2xl z-50 flex flex-col"
+            >
+              <div className="p-6 border-b border-gray-100 flex items-center justify-between bg-white">
+                <h2 className="text-2xl font-bold flex items-center">
+                  <ShoppingCart className="w-6 h-6 mr-3 text-red-600" />
+                  Giỏ hàng của bạn
+                </h2>
+                <button 
+                  onClick={() => setIsCartOpen(false)}
+                  className="p-2 hover:bg-gray-100 rounded-full transition-colors"
+                >
+                  <X className="w-6 h-6 text-gray-500" />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-6 bg-gray-50">
+                {cart.length === 0 ? (
+                  <div className="h-full flex flex-col items-center justify-center text-gray-400 space-y-4">
+                    <ShoppingCart className="w-16 h-16 opacity-20" />
+                    <p>Giỏ hàng đang trống</p>
+                    <button 
+                      onClick={() => setIsCartOpen(false)}
+                      className="text-red-600 font-bold hover:underline"
+                    >
+                      Tiếp tục mua sắm
+                    </button>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {cart.map(item => (
+                      <div key={item.id} className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex gap-4">
+                        <img src={getDirectImageUrl(item.image)} alt={item.name} className="w-20 h-20 object-cover rounded-xl" />
+                        <div className="flex-1 flex flex-col justify-between">
+                          <div>
+                            <h3 className="font-bold text-gray-900 leading-tight">{item.name}</h3>
+                            <div className="text-red-600 font-bold mt-1">{Number(item.price).toLocaleString('vi-VN')}đ</div>
+                          </div>
+                          <div className="flex items-center justify-between mt-2">
+                            <div className="flex items-center space-x-3 bg-gray-50 rounded-lg p-1 border border-gray-100">
+                              <button 
+                                onClick={() => updateQuantity(item.id!, -1)}
+                                className="w-8 h-8 flex items-center justify-center rounded-md bg-white shadow-sm text-gray-600 hover:text-red-600"
+                              >
+                                <Minus className="w-4 h-4" />
+                              </button>
+                              <span className="font-bold w-4 text-center">{item.quantity}</span>
+                              <button 
+                                onClick={() => updateQuantity(item.id!, 1)}
+                                className="w-8 h-8 flex items-center justify-center rounded-md bg-white shadow-sm text-gray-600 hover:text-red-600"
+                              >
+                                <Plus className="w-4 h-4" />
+                              </button>
+                            </div>
+                            <button 
+                              onClick={() => removeFromCart(item.id!)}
+                              className="p-2 text-gray-400 hover:text-red-600 transition-colors"
+                            >
+                              <Trash2 className="w-5 h-5" />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {cart.length > 0 && (
+                <div className="p-6 bg-white border-t border-gray-100">
+                  <div className="flex justify-between items-center mb-6">
+                    <span className="text-gray-500 font-medium">Tổng cộng:</span>
+                    <span className="text-2xl font-black text-red-600">{cartTotal.toLocaleString('vi-VN')}đ</span>
+                  </div>
+                  <button 
+                    onClick={() => {
+                      setIsCartOpen(false);
+                      document.getElementById('liên-hệ')?.scrollIntoView({ behavior: 'smooth' });
+                    }}
+                    className="w-full bg-red-600 text-white font-bold py-4 rounded-xl hover:bg-red-700 transition-colors shadow-lg shadow-red-600/20"
+                  >
+                    Tiến hành đặt hàng
+                  </button>
+                </div>
+              )}
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
 
       {/* Footer Bottom */}
       <footer className="py-12 border-t border-gray-100">
