@@ -727,18 +727,18 @@ const Landing = () => {
                       </h4>
                       <div className="flex flex-col items-center bg-white p-6 rounded-xl shadow-sm">
                         <img 
-                          src={`https://qr.sepay.vn/img?acc=962476LINQ&bank=BIDV&amount=${cartTotal}&des=${orderCode}&template=compact`} 
+                          src={`https://qr.sepay.vn/img?acc=109866606666&bank=VietinBank&amount=${cartTotal}&des=SEVQR+TKPSPF+${orderCode}&template=compact`} 
                           alt="QR Code" 
                           className="w-48 h-48 object-contain mb-4 border border-gray-100 rounded-lg"
                         />
                         <div className="text-center text-sm space-y-2 w-full">
                           <div className="flex justify-between border-b border-gray-50 pb-2">
                             <span className="text-gray-500">Ngân hàng:</span>
-                            <strong>BIDV</strong>
+                            <strong>VietinBank</strong>
                           </div>
                           <div className="flex justify-between border-b border-gray-50 pb-2">
                             <span className="text-gray-500">Số tài khoản:</span>
-                            <strong>962476LINQ</strong>
+                            <strong>109866606666</strong>
                           </div>
                           <div className="flex justify-between border-b border-gray-50 pb-2">
                             <span className="text-gray-500">Số tiền:</span>
